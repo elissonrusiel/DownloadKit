@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DownloadKit Architecture</title>
+<style>
+  :root { --fg: #1a202c; --muted: #4a5568; --line: #e2e8f0; --accent: #4c51bf; --bg: #f7fafc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 40px 0 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; color: #744210;
+           background: #fefcbf; border: 1px solid #ecc94b; border-radius: 4px; padding: 1px 8px; }
+  p.lead { color: var(--muted); margin: 4px 0 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; background: white;
+          border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #edf2f7; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: #edf2f7;
+         padding: 1px 5px; border-radius: 3px; }
+  pre.code { background: #1a202c; color: #e2e8f0; padding: 16px; border-radius: 6px; overflow-x: auto;
+             font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre.code code { background: none; padding: 0; color: inherit; }
+  .table-wrap { overflow-x: auto; }
+
+  .diagram {
+    background: white; border: 1px solid #e2e8f0; border-radius: 6px;
+    padding: 16px 12px; margin: 18px 0 8px;
+    cursor: zoom-in; position: relative; overflow-x: auto;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .diagram svg { background: transparent !important; max-width: 100%; height: auto; }
+  .diagram::after {
+    content: "⤢ click to enlarge";
+    position: absolute; top: 8px; right: 12px;
+    font-size: 11px; color: #4a5568;
+    background: rgba(255,255,255,0.85);
+    padding: 2px 6px; border-radius: 3px; border: 1px solid #e2e8f0;
+    pointer-events: none;
+  }
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.92); z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 24px 56px; cursor: zoom-out;
+  }
+  .modal-inner {
+    background: white; border-radius: 8px; padding: 24px;
+    width: 96vw; height: 92vh;
+    display: flex; align-items: stretch; justify-content: center;
+    overflow: auto; cursor: default;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  }
+  .modal-inner svg {
+    width: 100% !important; height: 100% !important;
+    max-width: 100% !important; max-height: 100% !important;
+  }
+  .modal-close {
+    position: fixed; top: 14px; right: 18px;
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(255,255,255,0.95);
+    border: 1px solid rgba(255,255,255,0.5);
+    color: #1a202c; font-size: 22px; line-height: 1;
+    cursor: pointer; z-index: 10001;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .modal-close:hover { background: white; }
+  .modal-hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    color: rgba(255,255,255,0.85); font-size: 12.5px;
+    background: rgba(15,23,42,0.6);
+    padding: 4px 12px; border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>DownloadKit: Architecture</h1>
+  <p class="sub"><span class="badge">PROPOSAL</span> &nbsp;A Swift package for reliable, resumable, background-capable file downloads on iOS and macOS. There is no code yet; this is the target design.</p>
+
+  <h2>1. Summary</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Decision</th><th>Choice</th><th>Why</th></tr>
+    <tr><td>Transport</td><td>One <code>URLSession</code> with background configuration (plus an optional foreground session)</td><td>Downloads keep going while the app is suspended or killed by the system</td></tr>
+    <tr><td>Concurrency model</td><td><code>DownloadManager</code> is an <code>actor</code>; events go out as <code>AsyncStream</code></td><td>Thread-safe state without locks; works naturally with SwiftUI and async/await</td></tr>
+    <tr><td>Scheduling</td><td>Own priority queue with a <code>maxConcurrent</code> limit, instead of handing every task to URLSession</td><td>Supports priorities, Wi-Fi-only rules and fair ordering. URLSession alone gives none of these.</td></tr>
+    <tr><td>Persistence</td><td>Task records + resume data on disk (JSON files in Application Support)</td><td>Restores the queue after the app relaunches and resumes partial downloads</td></tr>
+    <tr><td>Reliability</td><td>Retry with exponential backoff, resuming from resume data; optional checksum check</td><td>Survives flaky networks without starting over from 0 bytes</td></tr>
+    <tr><td>Platforms</td><td>iOS 16+, macOS 13+, Swift 5.9+, no dependencies</td><td>Modern concurrency, easy to adopt</td></tr>
+  </table></div>
+
+  <h2>2. Component architecture</h2>
+  <p class="lead">Four layers. The app talks only to the public API, and only the transport layer talks to URLSession. Colours: <span style="background:#e0e7ff;padding:0 6px;border-radius:3px;color:#1a202c">Public API</span> <span style="background:#dcfce7;padding:0 6px;border-radius:3px;color:#1a202c">Core</span> <span style="background:#fef3c7;padding:0 6px;border-radius:3px;color:#1a202c">Transport</span> <span style="background:#fce7f3;padding:0 6px;border-radius:3px;color:#1a202c">Persistence</span> <span style="background:#e2e8f0;padding:0 6px;border-radius:3px;color:#1a202c">System</span>. Dashed arrows are events flowing back.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TB
+  App["Host app / SwiftUI views"]:::app
+  DM["DownloadManager (actor) + DownloadConfiguration"]:::api
+  DT["DownloadTask handle (state, events stream)"]:::api
+  NM["NetworkMonitor (NWPathMonitor)"]:::core
+  SCH["Scheduler (priority queue, concurrency slots)"]:::core
+  RP["RetryPolicy (backoff, error classes)"]:::core
+  EB["EventBus (AsyncStream fan-out)"]:::core
+  SC["SessionCoordinator (URLSession delegate + TaskRegistry)"]:::transport
+  FM["FileMover"]:::transport
+  VAL["Validator (size, SHA-256)"]:::transport
+  TS[("TaskStore")]:::store
+  RDS[("ResumeDataStore")]:::store
+  OS(["URLSession background daemon"]):::os
+
+  classDef app fill:#ffffff,stroke:#4a5568
+  classDef api fill:#e0e7ff,stroke:#4c51bf
+  classDef core fill:#dcfce7,stroke:#2f855a
+  classDef transport fill:#fef3c7,stroke:#b7791f
+  classDef store fill:#fce7f3,stroke:#b83280
+  classDef os fill:#e2e8f0,stroke:#4a5568
+
+  App -->|enqueue, pause, cancel| DM
+  DM -->|returns| DT
+  DM --> SCH
+  DM --> TS
+  NM -->|path changed| SCH
+  SCH -->|start when slot free| SC
+  SC <-->|tasks and callbacks| OS
+  SC -->|finished| FM --> VAL
+  SC -->|error| RP
+  RP -.->|retry later| SCH
+  SC -->|save on pause or error| RDS
+  SC -->|progress, done, failed| EB
+  EB -.-> DT
+  DT -.->|state and progress| App
+  </pre></div>
+
+  <div class="table-wrap"><table>
+    <tr><th>Component</th><th>Job</th><th>Notes</th></tr>
+    <tr><td><code>DownloadManager</code></td><td>Public entry point; owns all state</td><td>An <code>actor</code>. Removes duplicates by URL + destination, so enqueuing the same file twice returns the existing task.</td></tr>
+    <tr><td><code>DownloadTask</code></td><td>Handle the app keeps hold of</td><td><code>Sendable</code> struct; exposes <code>events: AsyncStream&lt;DownloadEvent&gt;</code></td></tr>
+    <tr><td><code>Scheduler</code></td><td>Decides what runs next</td><td>Orders by priority, then FIFO. Checks network rules (Wi-Fi only, low-data mode) before starting.</td></tr>
+    <tr><td><code>SessionCoordinator</code></td><td>Wraps URLSession and its delegate</td><td>The delegate is <code>nonisolated</code> and passes events on to the actor. Moving the file must happen <em>synchronously</em> inside <code>didFinishDownloadingTo</code>.</td></tr>
+    <tr><td><code>TaskRegistry</code></td><td>Maps URLSession tasks to DownloadKit IDs</td><td>Saves the ID in <code>URLSessionTask.taskDescription</code> so the mapping survives a relaunch.</td></tr>
+    <tr><td><code>FileMover</code> / <code>Validator</code></td><td>Puts the finished file in place and checks it</td><td>Moves the file atomically, then checks the expected size and optional SHA-256.</td></tr>
+    <tr><td><code>RetryPolicy</code></td><td>Sorts errors into retry vs. give up</td><td>Retries timeouts, lost connections and 5xx. Gives up on 4xx and on cancellation.</td></tr>
+    <tr><td><code>TaskStore</code> / <code>ResumeDataStore</code></td><td>Saves state to disk</td><td>Writes on every state change and throttles progress writes (about once per second).</td></tr>
+  </table></div>
+
+  <h2>3. Download flow</h2>
+  <p class="lead">What happens from <code>enqueue</code> to a finished file, including retries.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A(["App calls enqueue(url, destination, priority)"]) --> B{"Same url + destination already known?"}
+  B -->|yes| B1["Return existing DownloadTask"]
+  B -->|no| C["Create TaskRecord, state = queued"]
+  C --> D["Persist to TaskStore"]
+  D --> E["Scheduler.insert by priority"]
+  E --> F{"Free slot and network rules OK?"}
+  F -->|no| F1["Stay queued; wait for slot or path change"]
+  F1 --> F
+  F -->|yes| G{"Resume data stored?"}
+  G -->|yes| H["session.downloadTask(withResumeData:)"]
+  G -->|no| I["session.downloadTask(with: request)"]
+  H --> J["Tag task with ID, resume(), state = downloading"]
+  I --> J
+  J --> K["didWriteData: emit progress (throttled)"]
+  K --> L{"Finished OK?"}
+  L -->|yes| M["didFinishDownloadingTo: move temp file now (sync)"]
+  M --> N{"Validator passes?"}
+  N -->|yes| O(["state = completed, emit .finished(fileURL), free slot"])
+  N -->|no| P["Delete file, error = validation failed"]
+  L -->|no| Q["didCompleteWithError"]
+  P --> R
+  Q --> Q1["Save resume data if present"]
+  Q1 --> R{"RetryPolicy: retry? attempts left?"}
+  R -->|yes| S["state = waitingToRetry, backoff 2^n s plus jitter"]
+  S --> E
+  R -->|no| T(["state = failed, emit .failed(error), free slot"])
+  O --> E2["Scheduler picks next task"]
+  T --> E2
+  </pre></div>
+
+  <h2>4. Task lifecycle</h2>
+  <p class="lead">Every <code>DownloadTask</code> is in exactly one of these states. <code>completed</code> and <code>cancelled</code> are final; <code>failed</code> can be retried by the app.</p>
+  <div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> queued: enqueue
+  queued --> downloading: slot free
+  downloading --> paused: pause (keep resume data)
+  paused --> queued: resume
+  downloading --> waitingToRetry: retryable error
+  waitingToRetry --> queued: backoff elapsed
+  downloading --> completed: file moved and valid
+  downloading --> failed: fatal error or no attempts left
+  queued --> cancelled: cancel
+  paused --> cancelled: cancel
+  downloading --> cancelled: cancel
+  waitingToRetry --> cancelled: cancel
+  failed --> queued: retry() by app
+  completed --> [*]
+  cancelled --> [*]
+  failed --> [*]
+  </pre></div>
+
+  <h2>5. Background and relaunch</h2>
+  <p class="lead">The system keeps downloading after the app is suspended or killed, then relaunches it in the background so DownloadKit can finish up.</p>
+  <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  participant App as AppDelegate
+  participant DM as DownloadManager
+  participant SC as SessionCoordinator
+  participant OS as nsurlsessiond
+  participant TS as TaskStore
+
+  Note over App,OS: App suspended or killed while downloads run in the system daemon
+  OS->>App: relaunch, handleEventsForBackgroundURLSession(id, completion)
+  App->>DM: handleBackgroundEvents(id, completion)
+  DM->>TS: load task records
+  DM->>SC: recreate URLSession with the same identifier
+  SC->>OS: getAllTasks
+  OS-->>SC: running and finished tasks
+  SC->>SC: re-map tasks via taskDescription
+  OS->>SC: didFinishDownloadingTo (per finished task)
+  SC->>SC: move file, validate
+  SC->>DM: completed(id, fileURL)
+  DM->>TS: persist state = completed
+  OS->>SC: urlSessionDidFinishEvents
+  SC->>DM: background events done
+  DM->>App: call stored completion handler on main thread
+  </pre></div>
+
+  <h2>6. Public API sketch</h2>
+<pre class="code"><code>public actor DownloadManager {
+    public static let shared = DownloadManager(configuration: .default)
+    public init(configuration: DownloadConfiguration)
+
+    @discardableResult
+    public func enqueue(_ url: URL,
+                        to destination: URL,
+                        priority: DownloadPriority = .normal,
+                        checksum: Checksum? = nil) async -> DownloadTask
+
+    public func pause(_ id: DownloadTask.ID) async
+    public func resume(_ id: DownloadTask.ID) async
+    public func cancel(_ id: DownloadTask.ID) async
+    public func retry(_ id: DownloadTask.ID) async
+    public func tasks() async -> [DownloadTask]
+
+    /// Call from application(_:handleEventsForBackgroundURLSession:completionHandler:)
+    public nonisolated func handleBackgroundEvents(identifier: String,
+                                                   completion: @escaping () -> Void)
+}
+
+public struct DownloadTask: Identifiable, Sendable {
+    public let id: UUID
+    public let url: URL
+    public let destination: URL
+    public var state: DownloadState { get async }
+    public var events: AsyncStream&lt;DownloadEvent&gt; { get }
+}
+
+public enum DownloadEvent: Sendable {
+    case stateChanged(DownloadState)
+    case progress(received: Int64, expected: Int64)
+    case finished(URL)
+    case failed(DownloadError)
+}
+
+// Usage
+let task = await DownloadManager.shared.enqueue(videoURL, to: localURL, priority: .high)
+for await event in task.events {
+    if case .progress(let got, let total) = event { progress = Double(got) / Double(total) }
+}</code></pre>
+
+  <h2>7. Proposed package layout</h2>
+<pre class="code"><code>DownloadKit/
+├── Package.swift
+├── Sources/DownloadKit/
+│   ├── API/          DownloadManager.swift, DownloadTask.swift, DownloadConfiguration.swift, DownloadEvent.swift
+│   ├── Core/         Scheduler.swift, RetryPolicy.swift, NetworkMonitor.swift, EventBus.swift
+│   ├── Transport/    SessionCoordinator.swift, TaskRegistry.swift, FileMover.swift, Validator.swift
+│   └── Persistence/  TaskStore.swift, ResumeDataStore.swift
+└── Tests/DownloadKitTests/
+    ├── SchedulerTests.swift        (priority order, concurrency limit)
+    ├── RetryPolicyTests.swift      (error classification, backoff)
+    └── DownloadFlowTests.swift     (URLProtocol stub, end to end)</code></pre>
+
+  <h2>8. Risks to design around</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Risk</th><th>Mitigation</th></tr>
+    <tr><td>The temp file is deleted as soon as <code>didFinishDownloadingTo</code> returns</td><td>Move it synchronously inside the delegate callback, never in a <code>Task { }</code> that runs later</td></tr>
+    <tr><td>Background sessions can't use completion-handler APIs and ignore some settings</td><td>Use the delegate only; keep the foreground session for small, urgent files</td></tr>
+    <tr><td>Resume data is only valid if the server supports range requests and ETags</td><td>If resuming fails, fall back to a full restart; record that the server doesn't support resume</td></tr>
+    <tr><td>The system may throttle background downloads (<code>isDiscretionary</code>)</td><td>Expose it as a per-task option; default to <code>false</code> for downloads the user started</td></tr>
+    <tr><td>Two session objects with the same background identifier</td><td>Create the session once inside <code>SessionCoordinator</code> and never expose it</td></tr>
+  </table></div>
+</main>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "neutral",
+    securityLevel: "loose",
+    themeVariables: {
+      background: "#ffffff",
+      primaryColor: "#f5f7fa",
+      primaryTextColor: "#1a202c",
+      primaryBorderColor: "#cbd5e0",
+      lineColor: "#4a5568",
+      actorBkg: "#edf2f7",
+      actorBorder: "#a0aec0",
+      actorTextColor: "#1a202c",
+      noteBkgColor: "#fffaf0",
+      noteTextColor: "#1a202c",
+      noteBorderColor: "#d69e2e",
+      sequenceNumberColor: "#ffffff"
+    },
+    sequence: {
+      actorMargin: 70, messageMargin: 40, mirrorActors: false,
+      showSequenceNumbers: true, useMaxWidth: true, wrap: true
+    },
+    flowchart: { useMaxWidth: true }
+  });
+</script>
+<script>
+  function openModal(source) {
+    const svg = source.querySelector("svg");
+    if (!svg) return;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    // Close only when the dark overlay itself is clicked, NOT the inner panel.
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    const inner = document.createElement("div");
+    inner.className = "modal-inner";
+    inner.innerHTML = svg.outerHTML;
+    const svgIn = inner.querySelector("svg");
+    svgIn.removeAttribute("width");
+    svgIn.removeAttribute("height");
+    svgIn.removeAttribute("style");
+    svgIn.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svgIn.style.width = "100%";
+    svgIn.style.height = "100%";
+    svgIn.style.display = "block";
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "modal-close";
+    closeBtn.innerHTML = "&times;";
+    closeBtn.title = "Close (Esc)";
+    closeBtn.addEventListener("click", () => overlay.remove());
+    const hint = document.createElement("div");
+    hint.className = "modal-hint";
+    hint.textContent = "Click outside the diagram or press Esc to close";
+    overlay.appendChild(inner);
+    overlay.appendChild(closeBtn);
+    overlay.appendChild(hint);
+    document.body.appendChild(overlay);
+    const escHandler = (e) => {
+      if (e.key === "Escape") {
+        overlay.remove();
+        document.removeEventListener("keydown", escHandler);
+      }
+    };
+    document.addEventListener("keydown", escHandler);
+  }
+
+  window.addEventListener("load", () => {
+    // Delay so mermaid has finished rendering before we hunt for SVGs.
+    setTimeout(() => {
+      document.querySelectorAll(".diagram").forEach((d) => {
+        d.addEventListener("click", () => openModal(d));
+        d.title = "Click to enlarge";
+      });
+    }, 800);
+  });
+</script>
+</body>
+</html>
