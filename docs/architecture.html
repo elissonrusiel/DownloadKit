@@ -92,7 +92,7 @@
     <tr><td>Scheduling</td><td>Own priority queue with a <code>maxConcurrent</code> limit, instead of handing every task to URLSession</td><td>Supports priorities, Wi-Fi-only rules and fair ordering. URLSession alone gives none of these.</td></tr>
     <tr><td>Persistence</td><td>Task records + resume data on disk (JSON files in Application Support)</td><td>Restores the queue after the app relaunches and resumes partial downloads</td></tr>
     <tr><td>Reliability</td><td>Retry with exponential backoff, resuming from resume data; optional checksum check</td><td>Survives flaky networks without starting over from 0 bytes</td></tr>
-    <tr><td>Platforms</td><td>iOS 16+, macOS 13+, Swift 5.9+, no dependencies</td><td>Modern concurrency, easy to adopt</td></tr>
+    <tr><td>Platforms</td><td>iOS 16+, macOS 13+, Swift 6 toolchain (strict concurrency), no dependencies</td><td>Data-race safety checked by the compiler; easy to adopt</td></tr>
   </table></div>
 
   <h2>2. Component architecture</h2>
