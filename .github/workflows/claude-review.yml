@@ -1,0 +1,75 @@
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Review against the task spec
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are reviewing a pull request to DownloadKit, a Swift 6 package (iOS 16+, macOS 13+).
+
+            1. Read the PR with `gh pr view` and `gh pr diff`.
+            2. Find the issue referenced by `Closes #N` in the PR body and read it with `gh issue view N`.
+               That issue is the task spec: goal, scope, design, acceptance criteria (AC1, AC2, ...) and test cases.
+               If there is no linked issue, say so in the summary and review against CONTRIBUTING.md only.
+            3. Read CONTRIBUTING.md (Testing rules, Definition of done) and any source files you need for context.
+            4. Check, for each acceptance criterion, whether the diff implements it and whether a test covers it.
+            5. Look for correctness bugs: logic errors, edge cases, Swift concurrency and actor-isolation problems,
+               data races, error handling, file-system and URLSession misuse.
+            6. Check the testing rules: Swift Testing (not XCTest), no real network, no Task.sleep or wall-clock waits,
+               unique temp directory per file-system test, tests independent of order.
+            7. Check scope: changes outside the spec's In scope list.
+
+            Post an inline comment (mcp__github_inline_comment__create_inline_comment) for each specific issue,
+            prefixed with **Blocking:** or **Non-blocking:**.
+
+            Then post exactly one summary comment with `gh pr comment` containing:
+            - a table: acceptance criterion | implemented (yes/no/partial) | covered by test (test name or "none")
+            - the list of blocking findings (or "none")
+            - the last line `Verdict: approve` or `Verdict: changes_requested`
+
+            A finding is blocking when it is a correctness bug, an acceptance criterion that is unmet or untested,
+            a violated testing rule, a broken build or test, or work outside the spec's scope.
+            Style preferences and naming nits are non-blocking.
+
+            Finish with the structured output: verdict "approve" only when there are zero blocking findings.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*)"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"]},"blocking":{"type":"integer","minimum":0},"summary":{"type":"string"}},"required":["verdict","blocking","summary"]}'
+
+      - name: Enforce verdict
+        env:
+          VERDICT: ${{ fromJSON(steps.review.outputs.structured_output || '{}').verdict }}
+          BLOCKING: ${{ fromJSON(steps.review.outputs.structured_output || '{}').blocking }}
+        run: |
+          echo "Verdict: ${VERDICT:-missing} (blocking findings: ${BLOCKING:-unknown})"
+          test "$VERDICT" = "approve"
