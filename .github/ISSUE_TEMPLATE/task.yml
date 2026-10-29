@@ -1,0 +1,154 @@
+name: Task spec
+description: A self-contained unit of work, specified so it can be built from the issue alone.
+title: "<Imperative summary, e.g. Implement FileMover>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every section below is part of the spec. See [CONTRIBUTING.md › Task specs](https://github.com/elissonrusiel/DownloadKit/blob/main/CONTRIBUTING.md#task-specs) for what good looks like.
+        After creating the issue: add it as a sub-issue of its epic, and add each dependency as **blocked by**.
+
+  - type: input
+    id: epic
+    attributes:
+      label: Epic
+      description: Parent epic issue.
+      placeholder: "#8"
+    validations:
+      required: true
+
+  - type: input
+    id: depends-on
+    attributes:
+      label: Depends on
+      description: Issues that must be closed first, or "none".
+      placeholder: "#7, #9"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      description: "Branch prefix. The branch is `<kind>/<issue number>-<slug>`."
+      options:
+        - feat
+        - fix
+        - chore
+    validations:
+      required: true
+
+  - type: input
+    id: slug
+    attributes:
+      label: Branch slug
+      placeholder: file-mover
+    validations:
+      required: true
+
+  - type: input
+    id: verify
+    attributes:
+      label: Verify command
+      description: The command that proves the task works.
+      placeholder: swift test --filter FileMoverTests
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One sentence describing what is true when this task is done.
+      placeholder: Finished downloads always end up at their destination before the system deletes the temporary file.
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Why this task exists and where it fits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: in-scope
+    attributes:
+      label: In scope
+      placeholder: "- ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Link the issue that owns each item.
+      placeholder: "- Validation (#14)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Source and test files to create or change.
+      placeholder: |
+        - `Sources/DownloadKit/Transport/FileMover.swift`
+        - `Tests/DownloadKitTests/Transport/FileMoverTests.swift`
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: Signatures, rules, and transition or decision tables. Use fenced ```swift blocks for code.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Numbered, each one testable.
+      value: |
+        - [ ] **AC1**
+        - [ ] **AC2**
+    validations:
+      required: true
+
+  - type: textarea
+    id: test-cases
+    attributes:
+      label: Test cases
+      description: At least one test per acceptance criterion. Name tests after the behaviour.
+      value: |
+        | Test | Scenario | Expected |
+        |---|---|---|
+        | `` | | |
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing-rules
+    attributes:
+      label: Extra testing rules
+      description: Leave empty to use the standard rules in CONTRIBUTING.md › Testing rules. Fill in only for tasks verified differently (e.g. manual device tests).
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Gotchas, open questions, and anything unverified (label it as such).
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Spec readiness
+      options:
+        - label: Every acceptance criterion can be checked by a test or a named manual step
+          required: true
+        - label: Out-of-scope items link to the issue that owns them
+          required: true
+        - label: The Definition of done in CONTRIBUTING.md applies (or exceptions are listed in Notes)
+          required: true
