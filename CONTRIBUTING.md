@@ -15,7 +15,7 @@ DownloadKit follows **GitHub Flow**: `main` is always releasable, and every chan
 
 3. **Commit in small steps.** Write the subject line in the imperative mood ("Add retry backoff"), keep it under about 72 characters, and add a body explaining *why* when it isn't obvious.
 4. **Open a PR to `main`.** Fill in the template and link the issue (`Closes #N`).
-5. **Merge once CI is green.** Squash-merge so each PR becomes one commit on `main`, then delete the branch.
+5. **Merge once CI and review pass.** Both the CI checks and the `Claude review` check must be green (see [Code review](#code-review)). Squash-merge so each PR becomes one commit on `main`, then delete the branch.
 
 ## Local checks
 
@@ -25,6 +25,21 @@ Run these before pushing. CI runs the same checks on macOS 15, plus an iOS Simul
 swift build
 swift test
 ```
+
+## Code review
+
+Every PR is reviewed by Claude ([`.github/workflows/claude-review.yml`](.github/workflows/claude-review.yml)) on open and on every push. The review reads the task spec in `Closes #N` and checks the diff against its acceptance criteria, the [Testing rules](#testing-rules) and the [Definition of done](#definition-of-done).
+
+- Specific issues are posted as inline comments, marked **Blocking** or **Non-blocking**.
+- A summary comment lists each acceptance criterion with its test, the blocking findings, and a `Verdict:` line.
+- The `Claude review` check fails unless the verdict is `approve`, meaning zero blocking findings. Fix the findings and push; the review runs again.
+
+Setup (repository admin, once):
+
+1. Run `claude setup-token` locally (requires a Claude Pro or Max plan) and save the token as the repository secret `CLAUDE_CODE_OAUTH_TOKEN`. Reviews then count against that plan's usage limits rather than per-token API billing.
+2. In the `Protect main` ruleset, add `Claude review` to the required status checks.
+
+PRs from forks receive no secrets, so the review check fails for them; a maintainer reviews those by hand.
 
 ## Task specs
 
